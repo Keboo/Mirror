@@ -3,6 +3,19 @@ using AssemblyToTest;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System.Linq;
 
+namespace System.Runtime.CompilerServices
+{
+    [AttributeUsage(AttributeTargets.Assembly, AllowMultiple = true)]
+    public class IgnoresAccessChecksToAttribute2 : Attribute
+    {
+        public IgnoresAccessChecksToAttribute2(string assemblyName)
+        {
+            AssemblyName = assemblyName;
+        }
+
+        public string AssemblyName { get; }
+    }
+}
 
 namespace Mirror.Tests
 {

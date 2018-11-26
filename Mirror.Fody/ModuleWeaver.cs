@@ -1,4 +1,5 @@
-﻿using Fody;
+﻿using System;
+using Fody;
 using Mirror.Fody;
 using Mono.Cecil;
 using System.Collections.Generic;
@@ -14,68 +15,74 @@ public class ModuleWeaver : BaseModuleWeaver
     public override void Execute()
     {
         Imports = new Imports(FindType, ModuleDefinition, this);
-        
 
-        var assemblyNames = new HashSet<string>();
-        foreach (TypeDefinition type in GetMirrorTypes())
+        try
         {
-            var mirrorAttribute =
-                type.CustomAttributes.FirstOrDefault(x => x.AttributeType.FullName == "Mirror.MirrorAttribute");
-            if (mirrorAttribute != null)
+            var assemblyNames = new HashSet<string>();
+            foreach (TypeDefinition type in ModuleDefinition.GetAllTypes())
             {
-                LogWarning($"Found {type.FullName}");
-                var mirroredType = mirrorAttribute.ConstructorArguments[0].Value.ToString();
-                TypeDefinition mirrorDefinition = FindMirroredType(mirroredType);
-                if (mirrorDefinition != null)
+                var mirrorAttribute =
+                    type.CustomAttributes.FirstOrDefault(x => x.AttributeType.FullName == "Mirror.MirrorAttribute");
+                if (mirrorAttribute != null)
                 {
-                    mirrorDefinition = ModuleDefinition.ImportReference(mirrorDefinition).Resolve();
-                    foreach (MethodDefinition externMethod in type.Methods.Where(x => x.RVA == 0))
+                    LogWarning($"Found {type.FullName}");
+                    var mirroredType = mirrorAttribute.ConstructorArguments[0].Value.ToString();
+                    TypeDefinition mirrorDefinition = FindMirroredType(mirroredType);
+                    if (mirrorDefinition != null)
                     {
-                        MethodDefinition mirroredMethod = mirrorDefinition.Methods.FirstOrDefault(x => x.Name == externMethod.Name);
-                        if (mirroredMethod != null)
+                        mirrorDefinition = ModuleDefinition.ImportReference(mirrorDefinition).Resolve();
+                        foreach (MethodDefinition externMethod in type.Methods.Where(x => x.RVA == 0))
                         {
-                            externMethod.Body = new MethodBody(externMethod);
-                            
-                            LogWarning("Overriding method");
-                            ILProcessor processor = externMethod.Body.GetILProcessor();
-                            processor.Emit(OpCodes.Call, ModuleDefinition.ImportReference(mirroredMethod));
-                            processor.Emit(OpCodes.Ret);
+                            MethodDefinition mirroredMethod = mirrorDefinition.Methods.FirstOrDefault(x => x.Name == externMethod.Name);
+                            if (mirroredMethod != null)
+                            {
+                                externMethod.Body = new MethodBody(externMethod);
 
-                            assemblyNames.Add(mirroredMethod.Module.Assembly.Name.Name);
-                        }
-                        else
-                        {
-                            LogWarning($"Could not find mirror method {externMethod.Name}");
-                        }
+                                LogWarning("Overriding method");
+                                ILProcessor processor = externMethod.Body.GetILProcessor();
+                                processor.Emit(OpCodes.Call, ModuleDefinition.ImportReference(mirroredMethod));
+                                processor.Emit(OpCodes.Ret);
 
-                        LogWarning($"{externMethod.Name} {externMethod.RVA}");
+                                assemblyNames.Add(mirroredMethod.Module.Assembly.Name.Name);
+                            }
+                            else
+                            {
+                                LogWarning($"Could not find mirror method {externMethod.Name}");
+                            }
+
+                            LogWarning($"{externMethod.Name} {externMethod.RVA}");
+                        }
+                    }
+                    else
+                    {
+                        LogWarning($"Could not find mirrored type {mirroredType}");
                     }
                 }
-                else
-                {
-                    LogWarning($"Could not find mirrored type {mirroredType}");
-                }
+            }
+
+            TypeDefinition ignoreChecksAttribute = GetIgnoresAccessChecksToAttribute();
+            MethodReference attributeCtor = ignoreChecksAttribute.GetConstructors()
+                .Single(c => c.Parameters.Count == 1 && c.Parameters[0].ParameterType.FullName == typeof(string).FullName);
+
+            foreach (var assembly in assemblyNames)
+            {
+                LogWarning($"Allowing access to {assembly}");
+                byte[] blob = GetAttributeBlob(assembly).ToArray();
+                ModuleDefinition.Assembly.CustomAttributes.Add(new CustomAttribute(attributeCtor, blob));
             }
         }
-
-        TypeDefinition ignoreChecksAttribute = CreateIgnoresAccessChecksToAttribute();
-        MethodReference attributeCtor = ignoreChecksAttribute.GetConstructors().Single();
-        //foreach (var a in ModuleDefinition.Assembly.CustomAttributes)
-        //{
-        //
-        //    LogWarning($"Foo {a.AttributeType.FullName}");
-        //}
-
-        foreach (var assembly in assemblyNames)
+        catch (Exception e)
         {
-            LogWarning($"Allowing access to {assembly}");
-            byte[] blob = GetAttributeBlob(assembly).ToArray();
-            ModuleDefinition.Assembly.CustomAttributes.Add(new CustomAttribute(attributeCtor, blob));
+            LogError(e.ToString());
         }
     }
 
     private static IEnumerable<byte> GetAttributeBlob(string data)
     {
+        //ECMA-335 11.23.3
+        //http://www.ecma-international.org/publications/files/ECMA-ST/ECMA-335.pdf
+
+        //Prolog
         yield return 0x01;
         yield return 0x00;
 
@@ -105,11 +112,12 @@ public class ModuleWeaver : BaseModuleWeaver
             yield return @byte;
         }
 
+        //Named arguments - none
         yield return 0x00;
         yield return 0x00;
     }
 
-    private TypeDefinition CreateIgnoresAccessChecksToAttribute()
+    private TypeDefinition GetIgnoresAccessChecksToAttribute()
     {
         TypeDefinition attribute = ModuleDefinition.GetType("System.Runtime.CompilerServices.IgnoresAccessChecksToAttribute");
         if (attribute != null)
@@ -117,8 +125,44 @@ public class ModuleWeaver : BaseModuleWeaver
             return attribute;
         }
 
-        attribute = new TypeDefinition("System.Runtime.CompilerServices", "IgnoresAccessChecksToAttribute", TypeAttributes.AutoClass | TypeAttributes.AnsiClass | TypeAttributes.BeforeFieldInit);
-        attribute.BaseType = FindType("System.Attribute");
+        attribute = new TypeDefinition("System.Runtime.CompilerServices", "IgnoresAccessChecksToAttribute",
+            TypeAttributes.AutoClass | TypeAttributes.AnsiClass | TypeAttributes.BeforeFieldInit, Imports.System.Attribute);
+
+        var assemblyNameBackingField = new FieldDefinition("<AssemblyName>k__BackingField", FieldAttributes.Private | FieldAttributes.InitOnly,
+            Imports.System.String);
+        attribute.Fields.Add(assemblyNameBackingField);
+
+        var ctor = new MethodDefinition(".ctor",
+            MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.SpecialName | MethodAttributes.RTSpecialName,
+            Imports.System.Void);
+        attribute.Methods.Add(ctor);
+        var assemblyNameParameter = new ParameterDefinition("assemblyName", ParameterAttributes.None, Imports.System.String);
+        ctor.Parameters.Add(assemblyNameParameter);
+
+        ILProcessor processor = ctor.Body.GetILProcessor();
+        processor.Emit(OpCodes.Ldarg_0);
+        processor.Emit(OpCodes.Call, Imports.System.AttributeCtor);
+        processor.Emit(OpCodes.Nop);
+        processor.Emit(OpCodes.Nop);
+        processor.Emit(OpCodes.Ldarg_0);
+        processor.Emit(OpCodes.Ldarg_1);
+        processor.Emit(OpCodes.Stfld, assemblyNameBackingField);
+        processor.Emit(OpCodes.Ret);
+
+        var assemblyNameProperty =
+            new PropertyDefinition("AssemblyName", PropertyAttributes.None, Imports.System.String);
+        var getMethod = new MethodDefinition("get_AssemblyName",
+            MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.SpecialName, Imports.System.String);
+        attribute.Methods.Add(getMethod);
+        assemblyNameProperty.GetMethod = getMethod;
+        processor = assemblyNameProperty.GetMethod.Body.GetILProcessor();
+        processor.Emit(OpCodes.Ldarg_0);
+        processor.Emit(OpCodes.Ldfld, assemblyNameBackingField);
+        processor.Emit(OpCodes.Ret);
+
+        attribute.Properties.Add(assemblyNameProperty);
+
+        ModuleDefinition.Types.Add(attribute);
 
         return attribute;
     }
@@ -139,24 +183,13 @@ public class ModuleWeaver : BaseModuleWeaver
         return null;
     }
 
-    private IEnumerable<TypeDefinition> GetMirrorTypes()
-    {
-        return from typeDefinition in ModuleDefinition.GetAllTypes()
-               from customAttribute in typeDefinition.CustomAttributes 
-               where customAttribute.AttributeType.FullName == "Mirror.MirrorAttribute" 
-               select typeDefinition;
-        //return ModuleDefinition.GetAllTypes().Where(type =>
-        //    type.CustomAttributes.Any(a => a.AttributeType.FullName == "Mirror.MirrorAttribute"));
-    }
-    
     public override IEnumerable<string> GetAssembliesForScanning()
     {
-        yield break;
-        //yield return "mscorlib";
-        //yield return "System";
-        //yield return "System.Runtime";
-        //yield return "System.Core";
-        //yield return "netstandard";
+        yield return "mscorlib";
+        yield return "System";
+        yield return "System.Runtime";
+        yield return "System.Core";
+        yield return "netstandard";
         //yield return "System.Collections";
         //yield return "System.ObjectModel";
         //yield return "System.Threading";
