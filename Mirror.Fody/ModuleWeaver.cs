@@ -25,37 +25,51 @@ public class ModuleWeaver : BaseModuleWeaver
                     type.CustomAttributes.FirstOrDefault(x => x.AttributeType.FullName == "Mirror.MirrorAttribute");
                 if (mirrorAttribute != null)
                 {
-                    LogWarning($"Found {type.FullName}");
                     var mirroredType = mirrorAttribute.ConstructorArguments[0].Value.ToString();
-                    TypeDefinition mirrorDefinition = FindMirroredType(mirroredType);
+                    TypeDefinition mirrorDefinition = FindMirroredType(mirroredType, type);
                     if (mirrorDefinition != null)
                     {
-                        mirrorDefinition = ModuleDefinition.ImportReference(mirrorDefinition).Resolve();
+                        FieldDefinition instanceField = null;
+                        if (!type.IsStatic())
+                        {
+                            instanceField = new FieldDefinition($"<{type.Name}>k__InstanceField", FieldAttributes.Private | FieldAttributes.InitOnly, 
+                                ModuleDefinition.ImportReference(mirrorDefinition));
+                            type.Fields.Add(instanceField);
+
+                            foreach (MethodDefinition ctor in type.GetConstructors())
+                            {
+                                MethodDefinition mirroredCtor = GetMirroredMethod(mirrorDefinition, ctor);
+
+                                if (mirroredCtor == null)
+                                {
+                                    LogError($"Could not find matching constructor in {mirrorDefinition.FullName}");
+                                    continue;
+                                }
+                                
+                                ctor.Body.Instructions.Insert(0, Instruction.Create(OpCodes.Ldarg_0));
+                                ctor.Body.Instructions.Insert(1, Instruction.Create(OpCodes.Newobj, ModuleDefinition.ImportReference(mirroredCtor)));
+                                ctor.Body.Instructions.Insert(2, Instruction.Create(OpCodes.Stfld, instanceField));
+                            }
+                        }
+                        
                         foreach (MethodDefinition externMethod in type.Methods.Where(x => x.RVA == 0))
                         {
-                            MethodDefinition mirroredMethod = mirrorDefinition.Methods.FirstOrDefault(x => x.Name == externMethod.Name);
+                            MethodDefinition mirroredMethod = GetMirroredMethod(mirrorDefinition, externMethod);
                             if (mirroredMethod != null)
                             {
-                                externMethod.Body = new MethodBody(externMethod);
-
-                                LogWarning("Overriding method");
-                                ILProcessor processor = externMethod.Body.GetILProcessor();
-                                processor.Emit(OpCodes.Call, ModuleDefinition.ImportReference(mirroredMethod));
-                                processor.Emit(OpCodes.Ret);
-
+                                externMethod.Body = BuildInvocation(ModuleDefinition.ImportReference(mirroredMethod), externMethod, instanceField);
+                                
                                 assemblyNames.Add(mirroredMethod.Module.Assembly.Name.Name);
                             }
                             else
                             {
-                                LogWarning($"Could not find mirror method {externMethod.Name}");
+                                LogError($"Could not find mirror method {externMethod.Name}");
                             }
-
-                            LogWarning($"{externMethod.Name} {externMethod.RVA}");
                         }
                     }
                     else
                     {
-                        LogWarning($"Could not find mirrored type {mirroredType}");
+                        LogError($"Could not find mirrored type {mirroredType}");
                     }
                 }
             }
@@ -66,7 +80,6 @@ public class ModuleWeaver : BaseModuleWeaver
 
             foreach (var assembly in assemblyNames)
             {
-                LogWarning($"Allowing access to {assembly}");
                 byte[] blob = GetAttributeBlob(assembly).ToArray();
                 ModuleDefinition.Assembly.CustomAttributes.Add(new CustomAttribute(attributeCtor, blob));
             }
@@ -167,20 +180,83 @@ public class ModuleWeaver : BaseModuleWeaver
         return attribute;
     }
 
-    private TypeDefinition FindMirroredType(string typeName)
+    private TypeDefinition FindMirroredType(string mirroredTypeName, TypeDefinition externType)
     {
         foreach (var assemblyReference in ModuleDefinition.AssemblyReferences)
         {
             AssemblyDefinition assembly = ResolveAssembly(assemblyReference.Name);
-            LogWarning($"{assemblyReference.Name} -> {assembly?.FullName}");
 
-            TypeDefinition type = assembly?.MainModule?.GetAllTypes().FirstOrDefault(t => t.FullName == typeName);
+            TypeDefinition type = assembly?.MainModule?.GetAllTypes().FirstOrDefault(MatchesExternType);
             if (type != null)
             {
                 return type;
             }
         }
         return null;
+
+        bool MatchesExternType(TypeDefinition type)
+        {
+            if (type.FullName != mirroredTypeName)
+            {
+                return false;
+            }
+
+            if (type.IsStatic() != externType.IsStatic())
+            {
+                return false;
+            }
+
+            return true;
+        }
+    }
+
+    private static MethodDefinition GetMirroredMethod(TypeDefinition mirroredType, MethodDefinition externMethod)
+    {
+        foreach (MethodDefinition method in mirroredType.Methods)
+        {
+            if (method.Name != externMethod.Name)
+            {
+                continue;
+            }
+
+            if (method.IsStatic != externMethod.IsStatic)
+            {
+                continue;
+            }
+
+            if (method.Parameters.Count != externMethod.Parameters.Count)
+            {
+                continue;
+            }
+
+            //TODO: check return type and parameter types
+
+            return method;
+        }
+
+        return null;
+    }
+
+    private static MethodBody BuildInvocation(MethodReference mirroredMethod, MethodDefinition externMethod, FieldDefinition instanceField)
+    {
+        var body = new MethodBody(externMethod);
+
+        ILProcessor processor = body.GetILProcessor();
+
+        if (externMethod.IsStatic)
+        {
+            processor.Emit(OpCodes.Call, mirroredMethod);
+        }
+        else
+        {
+            processor.Emit(OpCodes.Ldarg_0);
+            processor.Emit(OpCodes.Ldfld, instanceField);
+            processor.Emit(OpCodes.Callvirt, mirroredMethod);
+        }
+
+        processor.Emit(OpCodes.Ret);
+
+        return body;
     }
 
     public override IEnumerable<string> GetAssembliesForScanning()

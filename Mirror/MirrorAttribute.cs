@@ -1,25 +1,18 @@
 ﻿using System;
-using System.Linq;
-using System.Reflection;
 
 namespace Mirror
 {
-    [AttributeUsage(AttributeTargets.Class)]
+    [AttributeUsage(AttributeTargets.Class | AttributeTargets.Method)]
     public class MirrorAttribute : Attribute
     {
-        public string TargetType { get; }
+        public string TargetName { get; }
 
-        public MirrorAttribute(string targetType)
+        public MirrorAttribute(string targetName)
         {
-            TargetType = targetType;
+            TargetName = targetName;
         }
-    }
 
-    public static class MirrorExtensions
-    {
-        public static string GetMirrorClass(this Type mirrorType)
-        {
-            return mirrorType.GetCustomAttributes<MirrorAttribute>().SingleOrDefault()?.TargetType;
-        }
+        public MirrorAttribute()
+        { }
     }
 }
