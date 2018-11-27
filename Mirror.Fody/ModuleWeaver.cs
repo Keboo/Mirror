@@ -7,6 +7,7 @@ using System.Linq;
 using System.Text;
 using Mono.Cecil.Cil;
 using Mono.Cecil.Rocks;
+using TypeMap = Mirror.Fody.TypeMap;
 
 public class ModuleWeaver : BaseModuleWeaver
 {
@@ -18,55 +19,38 @@ public class ModuleWeaver : BaseModuleWeaver
 
         try
         {
+            TypeDefinition unusedType = CreateUnusedType();
+            ModuleDefinition.Types.Add(unusedType);
+
             var assemblyNames = new HashSet<string>();
+            var mappedTypes = new List<TypeMap>();
             foreach (TypeDefinition type in ModuleDefinition.GetAllTypes())
             {
-                if (type.TryGetMirrorTargetName(out string mirroredType))
+                TypeDefinition mirrorType = ProcessMirrorType(type, unusedType);
+                if (mirrorType != null)
                 {
-                    TypeDefinition mirrorDefinition = FindMirroredType(mirroredType, type);
-                    if (mirrorDefinition != null)
+                    mappedTypes.Add(new TypeMap(type, mirrorType));
+                }
+            }
+
+            foreach (TypeMap typeMap in mappedTypes)
+            {
+                foreach (MethodDefinition externMethod in typeMap.ExternType.Methods.Where(x => x.IsExtern() && x.Parameters.All(p => p.ParameterType.FullName != unusedType.FullName)))
+                {
+                    MethodDefinition mirroredMethod = GetMirroredMethod(typeMap.MirrorType, externMethod);
+                    if (mirroredMethod != null)
                     {
-                        FieldDefinition instanceField = null;
-                        if (!type.IsStatic())
-                        {
-                            instanceField = new FieldDefinition(GetInstanceFieldName(type), FieldAttributes.Public, 
-                                ModuleDefinition.ImportReference(mirrorDefinition));
-                            type.Fields.Add(instanceField);
+                        FieldDefinition instanceField = typeMap.ExternType.GetInstanceField();
+                        externMethod.Body = BuildExternMethodBody(ModuleDefinition.ImportReference(mirroredMethod), 
+                            externMethod, instanceField, unusedType);
 
-                            foreach (MethodDefinition ctor in type.GetConstructors())
-                            {
-                                MethodDefinition mirroredCtor = GetMirroredMethod(mirrorDefinition, ctor);
-
-                                if (mirroredCtor == null)
-                                {
-                                    LogError($"Could not find matching constructor in {mirrorDefinition.FullName}");
-                                    continue;
-                                }
-                                
-                                ctor.Body.Instructions.Insert(0, Instruction.Create(OpCodes.Ldarg_0));
-                                ctor.Body.Instructions.Insert(1, Instruction.Create(OpCodes.Newobj, ModuleDefinition.ImportReference(mirroredCtor)));
-                                ctor.Body.Instructions.Insert(2, Instruction.Create(OpCodes.Stfld, instanceField));
-                            }
-                        }
-                        
-                        foreach (MethodDefinition externMethod in type.Methods.Where(x => x.RVA == 0))
-                        {
-                            MethodDefinition mirroredMethod = GetMirroredMethod(mirrorDefinition, externMethod);
-                            if (mirroredMethod != null)
-                            {
-                                externMethod.Body = BuildInvocation(ModuleDefinition.ImportReference(mirroredMethod), externMethod, instanceField);
-                                
-                                assemblyNames.Add(mirroredMethod.Module.Assembly.Name.Name);
-                            }
-                            else
-                            {
-                                LogError($"Could not find mirror method {type.FullName}.{externMethod.GetMirrorMethodName()}");
-                            }
-                        }
+                        assemblyNames.Add(mirroredMethod.Module.Assembly.Name.Name);
                     }
                     else
                     {
-                        LogError($"Could not find mirrored type {mirroredType}");
+                        string parameters = string.Join(", ",
+                            externMethod.Parameters.Select(p => p.ParameterType.Resolve().GetMirrorTypeName()));
+                        LogError($"Could not find mirror method {typeMap.MirrorType.FullName}.{externMethod.GetMirrorMethodName()}({parameters})");
                     }
                 }
             }
@@ -125,6 +109,58 @@ public class ModuleWeaver : BaseModuleWeaver
         //Named arguments - none
         yield return 0x00;
         yield return 0x00;
+    }
+
+    private TypeDefinition ProcessMirrorType(TypeDefinition type, TypeDefinition unusedType)
+    {
+        if (type.TryGetMirrorTargetName(out string mirroredType))
+        {
+            TypeDefinition mirrorDefinition = FindMirroredType(mirroredType, type);
+            if (mirrorDefinition != null)
+            {
+                if (!type.IsStatic())
+                {
+                    var instanceField = new FieldDefinition(type.GetInstanceFieldName(), FieldAttributes.Public,
+                        ModuleDefinition.ImportReference(mirrorDefinition));
+                    type.Fields.Add(instanceField);
+
+                    foreach (MethodDefinition ctor in type.GetConstructors().Where(c => c.Parameters.All(p => p.ParameterType != unusedType)))
+                    {
+                        MethodDefinition mirroredCtor = GetMirroredMethod(mirrorDefinition, ctor);
+
+                        if (mirroredCtor == null)
+                        {
+                            LogError($"Could not find matching constructor in {mirrorDefinition.FullName}");
+                            continue;
+                        }
+
+                        ctor.Body.Instructions.Insert(0, Instruction.Create(OpCodes.Ldarg_0));
+                        int index = 1;
+                        foreach (var parameter in ctor.Parameters)
+                        {
+                            ctor.Body.Instructions.Insert(index++, Instruction.Create(OpCodes.Ldarg, parameter));
+                        }
+                        ctor.Body.Instructions.Insert(index++, Instruction.Create(OpCodes.Newobj, ModuleDefinition.ImportReference(mirroredCtor)));
+                        ctor.Body.Instructions.Insert(index, Instruction.Create(OpCodes.Stfld, instanceField));
+                    }
+
+                    var hiddenCtor = new MethodDefinition(".ctor", MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.SpecialName | MethodAttributes.RTSpecialName, 
+                        Imports.System.Void)
+                    {
+                        Parameters = { new ParameterDefinition("ignored", ParameterAttributes.None, unusedType) }
+                    };
+                    ILProcessor processor = hiddenCtor.Body.GetILProcessor();
+                    //processor.Emit(OpCodes.Ldarg_0);
+                    //processor.Emit(OpCodes.Call, Imports.System.ObjectCtor);
+                    processor.Emit(OpCodes.Nop);
+                    processor.Emit(OpCodes.Ret);
+                    type.Methods.Add(hiddenCtor);
+                }
+                return mirrorDefinition;
+            }
+            LogError($"Could not find mirrored type {mirroredType}");
+        }
+        return null;
     }
 
     private TypeDefinition GetIgnoresAccessChecksToAttribute()
@@ -207,6 +243,18 @@ public class ModuleWeaver : BaseModuleWeaver
         }
     }
 
+    private TypeDefinition CreateUnusedType()
+    {
+        //Used to ensure we avoid overload collision
+        return new TypeDefinition("Mirror", "<Unused>",
+            TypeAttributes.Public | TypeAttributes.SequentialLayout | TypeAttributes.AnsiClass | TypeAttributes.Sealed |
+            TypeAttributes.BeforeFieldInit, Imports.System.ValueType) 
+        {
+            PackingSize = 0, 
+            ClassSize = 1
+        };
+    }
+
     private static MethodDefinition GetMirroredMethod(TypeDefinition mirroredType, MethodDefinition externMethod)
     {
         string methodName = externMethod.GetMirrorMethodName();
@@ -228,6 +276,26 @@ public class ModuleWeaver : BaseModuleWeaver
                 continue;
             }
 
+            bool parametersMatch = true;
+            for (int i = 0; i < method.Parameters.Count; i++)
+            {
+                if (method.Parameters[i].ParameterType.FullName != externMethod.Parameters[i].ParameterType.FullName)
+                {
+                    if (externMethod.Parameters[i].ParameterType.Resolve()
+                        .TryGetMirrorTargetName(out string mirrorName) && 
+                        method.Parameters[i].ParameterType.FullName == mirrorName)
+                    {
+                        continue;
+                    }
+                    parametersMatch = false;
+                    break;
+                }
+            }
+            if (!parametersMatch)
+            {
+                continue;
+            }
+
             if (method.ReturnType.FullName != externMethod.ReturnType.FullName)
             {
                 if (externMethod.ReturnType.Resolve()?.TryGetMirrorTargetName(out _) != true)
@@ -236,15 +304,14 @@ public class ModuleWeaver : BaseModuleWeaver
                 }
             }
 
-            //TODO: check return type and parameter types
             return method;
         }
 
         return null;
     }
 
-    private static MethodBody BuildInvocation(MethodReference mirroredMethod, MethodDefinition externMethod, 
-        FieldDefinition instanceField)
+    private static MethodBody BuildExternMethodBody(MethodReference mirroredMethod, MethodDefinition externMethod,
+        FieldDefinition instanceField, TypeDefinition unusedType)
     {
         var body = new MethodBody(externMethod);
 
@@ -256,24 +323,55 @@ public class ModuleWeaver : BaseModuleWeaver
             var resolvedReturnType = externMethod.ReturnType.Resolve();
             if (resolvedReturnType?.TryGetMirrorTargetName(out string _) == true)
             {
-                MethodDefinition defaultCtor = resolvedReturnType.GetConstructors().Single(c => c.Parameters.Count == 0);
-                setField = resolvedReturnType.Fields.Single(x => x.Name == GetInstanceFieldName(resolvedReturnType));
+                MethodDefinition hiddenCtor = resolvedReturnType.GetConstructors()
+                    .Single(c => c.Parameters.Count == 1 &&
+                                 c.Parameters[0].ParameterType == unusedType);
+                setField = resolvedReturnType.Fields.Single(x => x.Name == resolvedReturnType.GetInstanceFieldName());
 
-                //Assume return type is another mirror class....
-                processor.Emit(OpCodes.Newobj, defaultCtor);
+                var unusedVariable = new VariableDefinition(unusedType);
+                body.Variables.Add(unusedVariable);
+
+                processor.Emit(OpCodes.Ldloca_S, unusedVariable);
+                processor.Emit(OpCodes.Initobj, unusedType);
+                processor.Emit(OpCodes.Ldloc, unusedVariable);
+                processor.Emit(OpCodes.Newobj, hiddenCtor);
                 processor.Emit(OpCodes.Dup);
             }
         }
 
-        if (externMethod.IsStatic)
+        if (externMethod.IsConstructor)
         {
-            processor.Emit(OpCodes.Call, mirroredMethod);
+            processor.Emit(OpCodes.Ldarg_0);
+            foreach (var parameter in externMethod.Parameters)
+            {
+                processor.Emit(OpCodes.Ldarg, parameter);
+            }
+            processor.Emit(OpCodes.Newobj, mirroredMethod);
+            processor.Emit(OpCodes.Stfld, instanceField);
         }
         else
         {
-            processor.Emit(OpCodes.Ldarg_0);
-            processor.Emit(OpCodes.Ldfld, instanceField);
-            processor.Emit(OpCodes.Callvirt, mirroredMethod);
+            if (externMethod.IsStatic)
+            {
+                processor.Emit(OpCodes.Call, mirroredMethod);
+            }
+            else
+            {
+                processor.Emit(OpCodes.Ldarg_0);
+                processor.Emit(OpCodes.Ldfld, instanceField);
+                foreach (var parameter in externMethod.Parameters)
+                {
+                    processor.Emit(OpCodes.Ldarg, parameter);
+
+                    var resolvedParameterType = parameter.ParameterType.Resolve();
+                    if (resolvedParameterType.TryGetMirrorTargetName(out string _))
+                    {
+                        processor.Emit(OpCodes.Ldfld, resolvedParameterType.GetInstanceField());
+                    }
+                }
+
+                processor.Emit(OpCodes.Callvirt, mirroredMethod);
+            }
         }
 
         if (setField != null)
@@ -286,11 +384,6 @@ public class ModuleWeaver : BaseModuleWeaver
         return body;
     }
 
-    private static string GetInstanceFieldName(TypeReference externType)
-    {
-        return $"<{externType.Name}>k__InstanceField";
-    }
-
     public override IEnumerable<string> GetAssembliesForScanning()
     {
         yield return "mscorlib";
@@ -300,3 +393,8 @@ public class ModuleWeaver : BaseModuleWeaver
         yield return "netstandard";
     }
 }
+
+
+
+public struct Unused
+{ }

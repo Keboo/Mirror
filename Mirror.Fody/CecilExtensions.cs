@@ -12,6 +12,12 @@ namespace Mirror.Fody
             return type.IsAbstract && type.IsSealed;
         }
 
+        public static bool IsExtern(this MethodDefinition method)
+        {
+            if (method == null) throw new ArgumentNullException(nameof(method));
+            return method.RVA == 0;
+        }
+
         public static bool TryGetMirrorTargetName(this ICustomAttributeProvider customAttributeProvider, out string targetName)
         {
             if (customAttributeProvider == null) throw new ArgumentNullException(nameof(customAttributeProvider));
@@ -32,6 +38,16 @@ namespace Mirror.Fody
             return true;
         }
 
+        public static string GetMirrorTypeName(this TypeDefinition type)
+        {
+            if (type == null) throw new ArgumentNullException(nameof(type));
+            if (!TryGetMirrorTargetName(type, out string targetName))
+            {
+                targetName = type.Name;
+            }
+            return targetName;
+        }
+
         public static string GetMirrorMethodName(this MethodDefinition externMethod)
         {
             if (!externMethod.TryGetMirrorTargetName(out string methodName) || 
@@ -41,6 +57,17 @@ namespace Mirror.Fody
             }
 
             return methodName;
+        }
+
+        public static FieldDefinition GetInstanceField(this TypeDefinition type)
+        {
+            string fieldName = type.GetInstanceFieldName();
+            return type.Fields.FirstOrDefault(f => f.Name == fieldName);
+        }
+
+        public static string GetInstanceFieldName(this TypeReference externType)
+        {
+            return $"<{externType.Name}>k__InstanceField";
         }
     }
 }

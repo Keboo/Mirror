@@ -35,8 +35,8 @@ namespace Mirror.Tests
 
             Assert.AreEqual("42", rv);
             var invocation = MethodInvocation.Invocations.Single();
-            Assert.AreEqual(nameof(MethodReturnValuesMirror.Get42), invocation.Method.Name);
-            Assert.AreEqual(typeof(MethodReturnValuesMirror).GetMirrorClass(), invocation.Method.DeclaringType.FullName);
+            Assert.AreEqual(nameof(MethodReturnValuesMirror.Get42), invocation.MemberName);
+            Assert.AreEqual(typeof(MethodReturnValuesMirror).GetMirrorClass(), invocation.ContainingType.FullName);
         }
 
         [TestMethod]
@@ -46,8 +46,8 @@ namespace Mirror.Tests
 
             Assert.AreEqual(43, rv);
             var invocation = MethodInvocation.Invocations.Single();
-            Assert.AreEqual(nameof(MethodReturnValuesMirror.Get43), invocation.Method.Name);
-            Assert.AreEqual(typeof(MethodReturnValuesMirror).GetMirrorClass(), invocation.Method.DeclaringType.FullName);
+            Assert.AreEqual(nameof(MethodReturnValuesMirror.Get43), invocation.MemberName);
+            Assert.AreEqual(typeof(MethodReturnValuesMirror).GetMirrorClass(), invocation.ContainingType.FullName);
         }
 
         [TestMethod]
@@ -59,8 +59,8 @@ namespace Mirror.Tests
 
             Assert.AreEqual(42, rv);
             var invocation = MethodInvocation.Invocations.Single();
-            Assert.AreEqual(nameof(GetHashCode), invocation.Method.Name);
-            Assert.AreEqual(typeof(MethodReturnValuesMirror).GetMirrorClass(), invocation.Method.DeclaringType.FullName);
+            Assert.AreEqual(nameof(GetHashCode), invocation.MemberName);
+            Assert.AreEqual(typeof(MethodReturnValuesMirror).GetMirrorClass(), invocation.ContainingType.FullName);
         }
 
         [TestMethod]
@@ -72,8 +72,8 @@ namespace Mirror.Tests
 
             Assert.AreEqual(42, rv);
             var invocation = MethodInvocation.Invocations.Single();
-            Assert.AreEqual(nameof(GetHashCode), invocation.Method.Name);
-            Assert.AreEqual(typeof(MethodReturnValuesMirror).GetMirrorClass(), invocation.Method.DeclaringType.FullName);
+            Assert.AreEqual(nameof(GetHashCode), invocation.MemberName);
+            Assert.AreEqual(typeof(MethodReturnValuesMirror).GetMirrorClass(), invocation.ContainingType.FullName);
         }
 
         [TestMethod]
@@ -84,8 +84,8 @@ namespace Mirror.Tests
             Assert.IsNotNull(instance);
             Assert.AreEqual(42, instance.RealGetHashCode());
             var invocation = MethodInvocation.Invocations.First();
-            Assert.AreEqual(nameof(MethodReturnValuesMirror.CreateInstance), invocation.Method.Name);
-            Assert.AreEqual(typeof(MethodReturnValuesMirror).GetMirrorClass(), invocation.Method.DeclaringType.FullName);
+            Assert.AreEqual(nameof(MethodReturnValuesMirror.CreateInstance), invocation.MemberName);
+            Assert.AreEqual(typeof(MethodReturnValuesMirror).GetMirrorClass(), invocation.ContainingType.FullName);
         }
     }
 }

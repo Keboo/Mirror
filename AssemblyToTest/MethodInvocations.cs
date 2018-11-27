@@ -1,7 +1,5 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Linq;
-using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Threading;
 
@@ -28,23 +26,34 @@ namespace AssemblyToTest
             RegisterCall(typeof(T), methodName);
         }
 
-        public static void RegisterCall(Type containingType, [CallerMemberName] string methodName = null)
+        public static void RegisterCall<T>(object[] parameters, [CallerMemberName] string methodName = null)
         {
-            if (containingType == null) throw new ArgumentNullException(nameof(containingType));
-            MethodInfo method = containingType.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.Instance)
-                .Single(x => x.Name == methodName);
-
-            Invocations.Add(new MethodInvocation(method));
+            RegisterCall(typeof(T), parameters, methodName);
         }
 
-        private MethodInvocation(MethodInfo method)
+        public static void RegisterCall(Type containingType, [CallerMemberName] string methodName = null)
         {
-            Method = method;
-            Parameters = Array.Empty<object>();
+            RegisterCall(containingType, null, methodName);
+        }
+
+        public static void RegisterCall(Type containingType, object[] parameters, [CallerMemberName] string methodName = null)
+        {
+            if (containingType == null) throw new ArgumentNullException(nameof(containingType));
+
+            Invocations.Add(new MethodInvocation(methodName, containingType, parameters));
+        }
+
+        private MethodInvocation(string memberName, Type containingType, object[] parameters)
+        {
+            MemberName = memberName;
+            ContainingType = containingType;
+            Parameters = parameters ?? Array.Empty<object>();
         }
 
         public object[] Parameters { get; }
+        
+        public Type ContainingType { get; }
 
-        public MethodInfo Method { get; }
+        public string MemberName { get; }
     }
 }

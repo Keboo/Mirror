@@ -33,8 +33,8 @@ namespace Mirror.Tests
             PublicStaticClassMirror.PrivateMethod();
 
             var invocation = MethodInvocation.Invocations.Single();
-            Assert.AreEqual(nameof(PublicStaticClassMirror.PrivateMethod), invocation.Method.Name);
-            Assert.AreEqual(typeof(PublicStaticClassMirror).GetMirrorClass(), invocation.Method.DeclaringType.FullName);
+            Assert.AreEqual(nameof(PublicStaticClassMirror.PrivateMethod), invocation.MemberName);
+            Assert.AreEqual(typeof(PublicStaticClassMirror).GetMirrorClass(), invocation.ContainingType.FullName);
         }
 
         [TestMethod]
@@ -43,8 +43,8 @@ namespace Mirror.Tests
             PublicStaticClassMirror.InternalMethod();
 
             var invocation = MethodInvocation.Invocations.Single();
-            Assert.AreEqual(nameof(PublicStaticClassMirror.InternalMethod), invocation.Method.Name);
-            Assert.AreEqual(typeof(PublicStaticClassMirror).GetMirrorClass(), invocation.Method.DeclaringType.FullName);
+            Assert.AreEqual(nameof(PublicStaticClassMirror.InternalMethod), invocation.MemberName);
+            Assert.AreEqual(typeof(PublicStaticClassMirror).GetMirrorClass(), invocation.ContainingType.FullName);
         }
 
         [TestMethod]
@@ -53,8 +53,8 @@ namespace Mirror.Tests
             PublicStaticClassMirror.PublicMethod();
 
             var invocation = MethodInvocation.Invocations.Single();
-            Assert.AreEqual(nameof(PublicStaticClassMirror.PublicMethod), invocation.Method.Name);
-            Assert.AreEqual(typeof(PublicStaticClassMirror).GetMirrorClass(), invocation.Method.DeclaringType.FullName);
+            Assert.AreEqual(nameof(PublicStaticClassMirror.PublicMethod), invocation.MemberName);
+            Assert.AreEqual(typeof(PublicStaticClassMirror).GetMirrorClass(), invocation.ContainingType.FullName);
         }
     }
 }
