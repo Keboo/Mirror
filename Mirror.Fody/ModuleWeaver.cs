@@ -21,18 +21,15 @@ public class ModuleWeaver : BaseModuleWeaver
             var assemblyNames = new HashSet<string>();
             foreach (TypeDefinition type in ModuleDefinition.GetAllTypes())
             {
-                var mirrorAttribute =
-                    type.CustomAttributes.FirstOrDefault(x => x.AttributeType.FullName == "Mirror.MirrorAttribute");
-                if (mirrorAttribute != null)
+                if (type.TryGetMirrorTargetName(out string mirroredType))
                 {
-                    var mirroredType = mirrorAttribute.ConstructorArguments[0].Value.ToString();
                     TypeDefinition mirrorDefinition = FindMirroredType(mirroredType, type);
                     if (mirrorDefinition != null)
                     {
                         FieldDefinition instanceField = null;
                         if (!type.IsStatic())
                         {
-                            instanceField = new FieldDefinition($"<{type.Name}>k__InstanceField", FieldAttributes.Private | FieldAttributes.InitOnly, 
+                            instanceField = new FieldDefinition(GetInstanceFieldName(type), FieldAttributes.Public, 
                                 ModuleDefinition.ImportReference(mirrorDefinition));
                             type.Fields.Add(instanceField);
 
@@ -63,7 +60,7 @@ public class ModuleWeaver : BaseModuleWeaver
                             }
                             else
                             {
-                                LogError($"Could not find mirror method {externMethod.Name}");
+                                LogError($"Could not find mirror method {type.FullName}.{externMethod.GetMirrorMethodName()}");
                             }
                         }
                     }
@@ -212,9 +209,11 @@ public class ModuleWeaver : BaseModuleWeaver
 
     private static MethodDefinition GetMirroredMethod(TypeDefinition mirroredType, MethodDefinition externMethod)
     {
+        string methodName = externMethod.GetMirrorMethodName();
+
         foreach (MethodDefinition method in mirroredType.Methods)
         {
-            if (method.Name != externMethod.Name)
+            if (method.Name != methodName)
             {
                 continue;
             }
@@ -229,19 +228,42 @@ public class ModuleWeaver : BaseModuleWeaver
                 continue;
             }
 
-            //TODO: check return type and parameter types
+            if (method.ReturnType.FullName != externMethod.ReturnType.FullName)
+            {
+                if (externMethod.ReturnType.Resolve()?.TryGetMirrorTargetName(out _) != true)
+                {
+                    continue;
+                }
+            }
 
+            //TODO: check return type and parameter types
             return method;
         }
 
         return null;
     }
 
-    private static MethodBody BuildInvocation(MethodReference mirroredMethod, MethodDefinition externMethod, FieldDefinition instanceField)
+    private static MethodBody BuildInvocation(MethodReference mirroredMethod, MethodDefinition externMethod, 
+        FieldDefinition instanceField)
     {
         var body = new MethodBody(externMethod);
 
         ILProcessor processor = body.GetILProcessor();
+
+        FieldDefinition setField = null;
+        if (mirroredMethod.ReturnType.FullName != externMethod.ReturnType.FullName)
+        {
+            var resolvedReturnType = externMethod.ReturnType.Resolve();
+            if (resolvedReturnType?.TryGetMirrorTargetName(out string _) == true)
+            {
+                MethodDefinition defaultCtor = resolvedReturnType.GetConstructors().Single(c => c.Parameters.Count == 0);
+                setField = resolvedReturnType.Fields.Single(x => x.Name == GetInstanceFieldName(resolvedReturnType));
+
+                //Assume return type is another mirror class....
+                processor.Emit(OpCodes.Newobj, defaultCtor);
+                processor.Emit(OpCodes.Dup);
+            }
+        }
 
         if (externMethod.IsStatic)
         {
@@ -254,9 +276,19 @@ public class ModuleWeaver : BaseModuleWeaver
             processor.Emit(OpCodes.Callvirt, mirroredMethod);
         }
 
+        if (setField != null)
+        {
+            processor.Emit(OpCodes.Stfld, setField);
+        }
+
         processor.Emit(OpCodes.Ret);
 
         return body;
+    }
+
+    private static string GetInstanceFieldName(TypeReference externType)
+    {
+        return $"<{externType.Name}>k__InstanceField";
     }
 
     public override IEnumerable<string> GetAssembliesForScanning()
@@ -266,8 +298,5 @@ public class ModuleWeaver : BaseModuleWeaver
         yield return "System.Runtime";
         yield return "System.Core";
         yield return "netstandard";
-        //yield return "System.Collections";
-        //yield return "System.ObjectModel";
-        //yield return "System.Threading";
     }
 }
