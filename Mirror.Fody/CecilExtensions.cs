@@ -24,7 +24,7 @@ namespace Mirror.Fody
 
             var mirrorAttribute =
                 customAttributeProvider.CustomAttributes.FirstOrDefault(x => x.AttributeType.FullName == "Mirror.MirrorAttribute");
-
+            
             if (mirrorAttribute == null)
             {
                 targetName = null;
@@ -38,7 +38,7 @@ namespace Mirror.Fody
             return true;
         }
 
-        public static string GetMirrorTypeName(this TypeDefinition type)
+        public static string GetMirrorTargetName(this IMemberDefinition type)
         {
             if (type == null) throw new ArgumentNullException(nameof(type));
             if (!TryGetMirrorTargetName(type, out string targetName))
@@ -48,7 +48,7 @@ namespace Mirror.Fody
             return targetName;
         }
 
-        public static string GetMirrorMethodName(this MethodDefinition externMethod)
+        public static string GetMirrorTargetName(this MethodDefinition externMethod)
         {
             if (!externMethod.TryGetMirrorTargetName(out string methodName) || 
                 string.IsNullOrWhiteSpace(methodName))

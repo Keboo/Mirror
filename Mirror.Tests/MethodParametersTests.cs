@@ -12,6 +12,7 @@ namespace Mirror.Tests
         private class MethodParametersMirror
         {
 #pragma warning disable CS0824 // Constructor is marked external
+#pragma warning disable CS0626 // Method, operator, or accessor is marked external and has no attributes on it
             public extern MethodParametersMirror();
             public extern MethodParametersMirror(int intValue);
             public extern MethodParametersMirror(string stringValue);
@@ -19,6 +20,7 @@ namespace Mirror.Tests
             public extern void DoSomething(string optionalString);
             public extern ReturnValueMirror DoSomething(ParameterMirror parameter);
 #pragma warning restore CS0824 // Constructor is marked external
+#pragma warning restore CS0626 // Method, operator, or accessor is marked external and has no attributes on it
         }
 
         [Mirror("AssemblyToTest.Parameter")]

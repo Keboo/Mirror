@@ -35,22 +35,52 @@ public class ModuleWeaver : BaseModuleWeaver
 
             foreach (TypeMap typeMap in mappedTypes)
             {
+                FieldDefinition instanceField = typeMap.ExternType.GetInstanceField();
+
                 foreach (MethodDefinition externMethod in typeMap.ExternType.Methods.Where(x => x.IsExtern() && x.Parameters.All(p => p.ParameterType.FullName != unusedType.FullName)))
                 {
-                    MethodDefinition mirroredMethod = GetMirroredMethod(typeMap.MirrorType, externMethod);
-                    if (mirroredMethod != null)
+                    if (externMethod.IsGetter || externMethod.IsSetter)
                     {
-                        FieldDefinition instanceField = typeMap.ExternType.GetInstanceField();
-                        externMethod.Body = BuildExternMethodBody(ModuleDefinition.ImportReference(mirroredMethod), 
-                            externMethod, instanceField, unusedType);
-
-                        assemblyNames.Add(mirroredMethod.Module.Assembly.Name.Name);
+                        PropertyDefinition externProperty = typeMap.ExternType.Properties.Single(p =>
+                            p.GetMethod == externMethod || p.SetMethod == externMethod);
+                        string mirrorTargetName = externProperty.GetMirrorTargetName();
+                        PropertyDefinition mirroredProperty = GetMirroredProperty(typeMap.MirrorType, externMethod, mirrorTargetName);
+                        if (mirroredProperty != null)
+                        {
+                            ForwardMethodToProperty(externMethod, mirroredProperty, instanceField);
+                            assemblyNames.Add(mirroredProperty.Module.Assembly.Name.Name);
+                        }
+                        else
+                        {
+                            FieldDefinition mirroredField = GetMirroredField(typeMap.MirrorType, externMethod, 
+                                externProperty.PropertyType, mirrorTargetName);
+                            if (mirroredField != null)
+                            {
+                                ForwardMethodToField(externMethod, ModuleDefinition.ImportReference(mirroredField), instanceField);
+                                assemblyNames.Add(mirroredField.Module.Assembly.Name.Name);
+                            }
+                            else
+                            {
+                                LogError($"Could not find mirrored property or field {typeMap.MirrorType.FullName}.{mirrorTargetName}");
+                            }
+                        }
                     }
                     else
                     {
-                        string parameters = string.Join(", ",
-                            externMethod.Parameters.Select(p => p.ParameterType.Resolve().GetMirrorTypeName()));
-                        LogError($"Could not find mirror method {typeMap.MirrorType.FullName}.{externMethod.GetMirrorMethodName()}({parameters})");
+                        MethodDefinition mirroredMethod = GetMirroredMethod(typeMap.MirrorType, externMethod);
+                        if (mirroredMethod != null)
+                        {
+                            externMethod.Body = BuildExternMethodBody(ModuleDefinition.ImportReference(mirroredMethod),
+                                externMethod, instanceField, unusedType);
+
+                            assemblyNames.Add(mirroredMethod.Module.Assembly.Name.Name);
+                        }
+                        else
+                        {
+                            string parameters = string.Join(", ",
+                                externMethod.Parameters.Select(p => p.ParameterType.Resolve().GetMirrorTargetName()));
+                            LogError($"Could not find mirrored method {typeMap.MirrorType.FullName}.{externMethod.GetMirrorTargetName()}({parameters})");
+                        }
                     }
                 }
             }
@@ -130,6 +160,7 @@ public class ModuleWeaver : BaseModuleWeaver
 
                         if (mirroredCtor == null)
                         {
+                            //Try to find a parameter-less ctor
                             LogError($"Could not find matching constructor in {mirrorDefinition.FullName}");
                             continue;
                         }
@@ -144,7 +175,7 @@ public class ModuleWeaver : BaseModuleWeaver
                         ctor.Body.Instructions.Insert(index, Instruction.Create(OpCodes.Stfld, instanceField));
                     }
 
-                    var hiddenCtor = new MethodDefinition(".ctor", MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.SpecialName | MethodAttributes.RTSpecialName, 
+                    var hiddenCtor = new MethodDefinition(".ctor", MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.SpecialName | MethodAttributes.RTSpecialName,
                         Imports.System.Void)
                     {
                         Parameters = { new ParameterDefinition("ignored", ParameterAttributes.None, unusedType) }
@@ -248,20 +279,102 @@ public class ModuleWeaver : BaseModuleWeaver
         //Used to ensure we avoid overload collision
         return new TypeDefinition("Mirror", "<Unused>",
             TypeAttributes.Public | TypeAttributes.SequentialLayout | TypeAttributes.AnsiClass | TypeAttributes.Sealed |
-            TypeAttributes.BeforeFieldInit, Imports.System.ValueType) 
+            TypeAttributes.BeforeFieldInit, Imports.System.ValueType)
         {
-            PackingSize = 0, 
+            PackingSize = 0,
             ClassSize = 1
         };
     }
 
+    private static FieldDefinition GetMirroredField(TypeDefinition mirroredType, MethodDefinition externMethod,
+        TypeReference externPropertyType, string mirrorTargetName)
+    {
+        foreach (FieldDefinition field in mirroredType.Fields)
+        {
+            if (field.Name != mirrorTargetName)
+            {
+                continue;
+            }
+
+            if (field.IsStatic != externMethod.IsStatic)
+            {
+                continue;
+            }
+
+            if (field.FieldType.FullName != externPropertyType.FullName)
+            {
+                if (externPropertyType.Resolve()?.TryGetMirrorTargetName(out _) != true)
+                {
+                    continue;
+                }
+            }
+
+            return field;
+        }
+
+        return null;
+    }
+
+    private static PropertyDefinition GetMirroredProperty(TypeDefinition mirroredType, MethodDefinition externMethod,
+        string mirrorTargetName)
+    {
+        foreach (PropertyDefinition property in mirroredType.Properties)
+        {
+            if (externMethod.IsGetter)
+            {
+                if (property.GetMethod.Name != mirrorTargetName && property.Name != mirrorTargetName)
+                {
+                    continue;
+                }
+
+                if (property.GetMethod.IsStatic != externMethod.IsStatic)
+                {
+                    continue;
+                }
+
+                if (property.GetMethod.ReturnType.FullName != externMethod.ReturnType.FullName)
+                {
+                    if (externMethod.ReturnType.Resolve()?.TryGetMirrorTargetName(out _) != true)
+                    {
+                        continue;
+                    }
+                }
+            }
+
+            if (externMethod.IsSetter)
+            {
+                if (property.SetMethod.Name != mirrorTargetName && property.Name != mirrorTargetName)
+                {
+                    continue;
+                }
+
+                if (property.SetMethod.IsStatic != externMethod.IsStatic)
+                {
+                    continue;
+                }
+
+                if (property.SetMethod.Parameters[0].ParameterType.FullName != externMethod.Parameters[0].ParameterType.FullName)
+                {
+                    if (externMethod.Parameters[0].ParameterType.Resolve()?.TryGetMirrorTargetName(out _) != true)
+                    {
+                        continue;
+                    }
+                }
+            }
+            
+            return property;
+        }
+
+        return null;
+    }
+
     private static MethodDefinition GetMirroredMethod(TypeDefinition mirroredType, MethodDefinition externMethod)
     {
-        string methodName = externMethod.GetMirrorMethodName();
+        string mirrorTargetName = externMethod.GetMirrorTargetName();
 
         foreach (MethodDefinition method in mirroredType.Methods)
         {
-            if (method.Name != methodName)
+            if (method.Name != mirrorTargetName)
             {
                 continue;
             }
@@ -279,18 +392,21 @@ public class ModuleWeaver : BaseModuleWeaver
             bool parametersMatch = true;
             for (int i = 0; i < method.Parameters.Count; i++)
             {
-                if (method.Parameters[i].ParameterType.FullName != externMethod.Parameters[i].ParameterType.FullName)
+                if (method.Parameters[i].ParameterType.FullName !=
+                    externMethod.Parameters[i].ParameterType.FullName)
                 {
                     if (externMethod.Parameters[i].ParameterType.Resolve()
-                        .TryGetMirrorTargetName(out string mirrorName) && 
+                            .TryGetMirrorTargetName(out string mirrorName) &&
                         method.Parameters[i].ParameterType.FullName == mirrorName)
                     {
                         continue;
                     }
+
                     parametersMatch = false;
                     break;
                 }
             }
+
             if (!parametersMatch)
             {
                 continue;
@@ -306,8 +422,93 @@ public class ModuleWeaver : BaseModuleWeaver
 
             return method;
         }
-
         return null;
+    }
+
+    private void ForwardMethodToProperty(MethodDefinition externMethod, PropertyDefinition mirroredProperty,
+        FieldDefinition instanceField)
+    {
+        ILProcessor processor = externMethod.Body.GetILProcessor();
+
+        if (externMethod.IsStatic)
+        {
+            if (externMethod.IsGetter)
+            {
+                processor.Emit(OpCodes.Call, ModuleDefinition.ImportReference(mirroredProperty.GetMethod));
+                processor.Emit(OpCodes.Ret);
+            }
+            else if (externMethod.IsSetter)
+            {
+                processor.Emit(OpCodes.Ldarg_0);
+                processor.Emit(OpCodes.Call, ModuleDefinition.ImportReference(mirroredProperty.SetMethod));
+                processor.Emit(OpCodes.Ret);
+            }
+            else
+            {
+                LogError("Property must have a getter or setter");
+            }
+        }
+        else
+        {
+            if (externMethod.IsGetter)
+            {
+                processor.Emit(OpCodes.Ldarg_0);
+                processor.Emit(OpCodes.Ldfld, instanceField);
+                processor.Emit(OpCodes.Callvirt, ModuleDefinition.ImportReference(mirroredProperty.GetMethod));
+                processor.Emit(OpCodes.Ret);
+            }
+            else if (externMethod.IsSetter)
+            {
+                processor.Emit(OpCodes.Ldarg_0);
+                processor.Emit(OpCodes.Ldfld, instanceField);
+                processor.Emit(OpCodes.Ldarg_1);
+                processor.Emit(OpCodes.Callvirt, ModuleDefinition.ImportReference(mirroredProperty.SetMethod));
+                processor.Emit(OpCodes.Nop);
+                processor.Emit(OpCodes.Ret);
+            }
+            else
+            {
+                LogError("Property must have a getter or setter");
+            }
+        }
+    }
+
+    private static void ForwardMethodToField(MethodDefinition externMethod, FieldReference mirroredField, FieldDefinition instanceField)
+    {
+        ILProcessor processor = externMethod.Body.GetILProcessor();
+
+        if (externMethod.IsStatic)
+        {
+            if (externMethod.IsGetter)
+            {
+                processor.Emit(OpCodes.Ldsfld, mirroredField);
+                processor.Emit(OpCodes.Ret);
+            }
+            else if (externMethod.IsSetter)
+            {
+                processor.Emit(OpCodes.Ldarg_0);
+                processor.Emit(OpCodes.Stsfld, mirroredField);
+                processor.Emit(OpCodes.Ret);
+            }
+        }
+        else
+        {
+            if (externMethod.IsGetter)
+            {
+                processor.Emit(OpCodes.Ldarg_0);
+                processor.Emit(OpCodes.Ldfld, instanceField);
+                processor.Emit(OpCodes.Ldfld, mirroredField);
+                processor.Emit(OpCodes.Ret);
+            }
+            else if (externMethod.IsSetter)
+            {
+                processor.Emit(OpCodes.Ldarg_0);
+                processor.Emit(OpCodes.Ldfld, instanceField);
+                processor.Emit(OpCodes.Ldarg_1);
+                processor.Emit(OpCodes.Stfld, mirroredField);
+                processor.Emit(OpCodes.Ret);
+            }
+        }
     }
 
     private static MethodBody BuildExternMethodBody(MethodReference mirroredMethod, MethodDefinition externMethod,
@@ -393,8 +594,3 @@ public class ModuleWeaver : BaseModuleWeaver
         yield return "netstandard";
     }
 }
-
-
-
-public struct Unused
-{ }

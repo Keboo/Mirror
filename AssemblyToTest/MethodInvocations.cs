@@ -21,6 +21,16 @@ namespace AssemblyToTest
             }
         }
 
+        public static void RegisterGetter<T>([CallerMemberName] string propertyName = null)
+        {
+            RegisterCall(typeof(T), null, propertyName + "_get");
+        }
+
+        public static void RegisterSetter<T>(object value, [CallerMemberName] string propertyName = null)
+        {
+            RegisterCall(typeof(T), new[] { value }, propertyName + "_set");
+        }
+
         public static void RegisterCall<T>([CallerMemberName] string methodName = null)
         {
             RegisterCall(typeof(T), methodName);
@@ -36,11 +46,11 @@ namespace AssemblyToTest
             RegisterCall(containingType, null, methodName);
         }
 
-        public static void RegisterCall(Type containingType, object[] parameters, [CallerMemberName] string methodName = null)
+        private static void RegisterCall(Type containingType, object[] parameters, string memberName)
         {
             if (containingType == null) throw new ArgumentNullException(nameof(containingType));
 
-            Invocations.Add(new MethodInvocation(methodName, containingType, parameters));
+            Invocations.Add(new MethodInvocation(memberName, containingType, parameters));
         }
 
         private MethodInvocation(string memberName, Type containingType, object[] parameters)
@@ -51,7 +61,7 @@ namespace AssemblyToTest
         }
 
         public object[] Parameters { get; }
-        
+
         public Type ContainingType { get; }
 
         public string MemberName { get; }
