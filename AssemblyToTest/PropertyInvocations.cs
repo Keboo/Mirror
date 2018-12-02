@@ -47,6 +47,8 @@
             }
         }
 
+        private PropertyValue PrivateReadonlyProperty { get; } = new PropertyValue { Value = 24 };
+
         private static int _PublicStaticProperty;
         public static int PublicStaticProperty
         {
@@ -95,6 +97,6 @@
 
     internal class PropertyValue
     {
-        private int Value { get; set; }
+        internal int Value { get; set; }
     }
 }

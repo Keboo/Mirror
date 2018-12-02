@@ -47,16 +47,25 @@ public class ModuleWeaver : BaseModuleWeaver
                         PropertyDefinition mirroredProperty = GetMirroredProperty(typeMap.MirrorType, externMethod, mirrorTargetName);
                         if (mirroredProperty != null)
                         {
-                            ForwardMethodToProperty(externMethod, mirroredProperty, instanceField);
-                            assemblyNames.Add(mirroredProperty.Module.Assembly.Name.Name);
+                            try
+                            {
+                                ForwardMethodToProperty(externMethod, mirroredProperty, instanceField, unusedType);
+                                assemblyNames.Add(mirroredProperty.Module.Assembly.Name.Name);
+                            }
+                            catch
+                            {
+                                LogError($"Error in {mirroredProperty.Name} {externMethod.Name}");
+                                throw;
+                            }
+                            
                         }
                         else
                         {
-                            FieldDefinition mirroredField = GetMirroredField(typeMap.MirrorType, externMethod, 
+                            FieldDefinition mirroredField = GetMirroredField(typeMap.MirrorType, externMethod,
                                 externProperty.PropertyType, mirrorTargetName);
                             if (mirroredField != null)
                             {
-                                ForwardMethodToField(externMethod, ModuleDefinition.ImportReference(mirroredField), instanceField);
+                                ForwardMethodToField(externMethod, ModuleDefinition.ImportReference(mirroredField), instanceField, unusedType);
                                 assemblyNames.Add(mirroredField.Module.Assembly.Name.Name);
                             }
                             else
@@ -70,7 +79,7 @@ public class ModuleWeaver : BaseModuleWeaver
                         MethodDefinition mirroredMethod = GetMirroredMethod(typeMap.MirrorType, externMethod);
                         if (mirroredMethod != null)
                         {
-                            externMethod.Body = BuildExternMethodBody(ModuleDefinition.ImportReference(mirroredMethod),
+                            externMethod.Body = ForwardMethodToMethod(ModuleDefinition.ImportReference(mirroredMethod),
                                 externMethod, instanceField, unusedType);
 
                             assemblyNames.Add(mirroredMethod.Module.Assembly.Name.Name);
@@ -320,7 +329,7 @@ public class ModuleWeaver : BaseModuleWeaver
     {
         foreach (PropertyDefinition property in mirroredType.Properties)
         {
-            if (externMethod.IsGetter)
+            if (externMethod.IsGetter && property.GetMethod != null)
             {
                 if (property.GetMethod.Name != mirrorTargetName && property.Name != mirrorTargetName)
                 {
@@ -339,9 +348,10 @@ public class ModuleWeaver : BaseModuleWeaver
                         continue;
                     }
                 }
+                return property;
             }
 
-            if (externMethod.IsSetter)
+            if (externMethod.IsSetter && property.SetMethod != null)
             {
                 if (property.SetMethod.Name != mirrorTargetName && property.Name != mirrorTargetName)
                 {
@@ -360,9 +370,9 @@ public class ModuleWeaver : BaseModuleWeaver
                         continue;
                     }
                 }
+                return property;
             }
-            
-            return property;
+
         }
 
         return null;
@@ -426,7 +436,7 @@ public class ModuleWeaver : BaseModuleWeaver
     }
 
     private void ForwardMethodToProperty(MethodDefinition externMethod, PropertyDefinition mirroredProperty,
-        FieldDefinition instanceField)
+        FieldDefinition instanceField, TypeDefinition unusedType)
     {
         ILProcessor processor = externMethod.Body.GetILProcessor();
 
@@ -434,12 +444,44 @@ public class ModuleWeaver : BaseModuleWeaver
         {
             if (externMethod.IsGetter)
             {
+                FieldDefinition returnValueInstanceField = null;
+
+                var resolvedReturnType = externMethod.ReturnType.Resolve();
+                if (resolvedReturnType?.TryGetMirrorTargetName(out string _) == true)
+                {
+                    MethodDefinition hiddenCtor = resolvedReturnType.GetConstructors()
+                        .Single(c => c.Parameters.Count == 1 &&
+                                     c.Parameters[0].ParameterType == unusedType);
+                    returnValueInstanceField = resolvedReturnType.Fields.Single(x => x.Name == resolvedReturnType.GetInstanceFieldName());
+
+                    var unusedVariable = new VariableDefinition(unusedType);
+                    externMethod.Body.Variables.Add(unusedVariable);
+
+                    processor.Emit(OpCodes.Ldloca_S, unusedVariable);
+                    processor.Emit(OpCodes.Initobj, unusedType);
+                    processor.Emit(OpCodes.Ldloc, unusedVariable);
+                    processor.Emit(OpCodes.Newobj, hiddenCtor);
+                    processor.Emit(OpCodes.Dup);
+                }
+
                 processor.Emit(OpCodes.Call, ModuleDefinition.ImportReference(mirroredProperty.GetMethod));
+
+                if (returnValueInstanceField != null)
+                {
+                    processor.Emit(OpCodes.Stfld, returnValueInstanceField);
+                }
+
                 processor.Emit(OpCodes.Ret);
             }
             else if (externMethod.IsSetter)
             {
                 processor.Emit(OpCodes.Ldarg_0);
+                var parameterType = externMethod.Parameters[0].ParameterType.Resolve();
+                if (parameterType?.TryGetMirrorTargetName(out string _) == true)
+                {
+                    FieldDefinition parameterInstanceField = parameterType.Fields.Single(x => x.Name == parameterType.GetInstanceFieldName());
+                    processor.Emit(OpCodes.Ldfld, parameterInstanceField);
+                }
                 processor.Emit(OpCodes.Call, ModuleDefinition.ImportReference(mirroredProperty.SetMethod));
                 processor.Emit(OpCodes.Ret);
             }
@@ -452,9 +494,33 @@ public class ModuleWeaver : BaseModuleWeaver
         {
             if (externMethod.IsGetter)
             {
+                FieldDefinition returnValueInstanceField = null;
+
+                var resolvedReturnType = externMethod.ReturnType.Resolve();
+                if (resolvedReturnType?.TryGetMirrorTargetName(out string _) == true)
+                {
+                    MethodDefinition hiddenCtor = resolvedReturnType.GetConstructors()
+                        .Single(c => c.Parameters.Count == 1 &&
+                                     c.Parameters[0].ParameterType == unusedType);
+                    returnValueInstanceField = resolvedReturnType.Fields.Single(x => x.Name == resolvedReturnType.GetInstanceFieldName());
+
+                    var unusedVariable = new VariableDefinition(unusedType);
+                    externMethod.Body.Variables.Add(unusedVariable);
+
+                    processor.Emit(OpCodes.Ldloca_S, unusedVariable);
+                    processor.Emit(OpCodes.Initobj, unusedType);
+                    processor.Emit(OpCodes.Ldloc, unusedVariable);
+                    processor.Emit(OpCodes.Newobj, hiddenCtor);
+                    processor.Emit(OpCodes.Dup);
+                }
+
                 processor.Emit(OpCodes.Ldarg_0);
                 processor.Emit(OpCodes.Ldfld, instanceField);
                 processor.Emit(OpCodes.Callvirt, ModuleDefinition.ImportReference(mirroredProperty.GetMethod));
+                if (returnValueInstanceField != null)
+                {
+                    processor.Emit(OpCodes.Stfld, returnValueInstanceField);
+                }
                 processor.Emit(OpCodes.Ret);
             }
             else if (externMethod.IsSetter)
@@ -462,6 +528,13 @@ public class ModuleWeaver : BaseModuleWeaver
                 processor.Emit(OpCodes.Ldarg_0);
                 processor.Emit(OpCodes.Ldfld, instanceField);
                 processor.Emit(OpCodes.Ldarg_1);
+                var parameterType = externMethod.Parameters[0].ParameterType.Resolve();
+                if (parameterType?.TryGetMirrorTargetName(out string _) == true)
+                {
+                    FieldDefinition parameterInstanceField = parameterType.Fields.Single(x => x.Name == parameterType.GetInstanceFieldName());
+                    processor.Emit(OpCodes.Ldfld, parameterInstanceField);
+                }
+
                 processor.Emit(OpCodes.Callvirt, ModuleDefinition.ImportReference(mirroredProperty.SetMethod));
                 processor.Emit(OpCodes.Nop);
                 processor.Emit(OpCodes.Ret);
@@ -473,7 +546,8 @@ public class ModuleWeaver : BaseModuleWeaver
         }
     }
 
-    private static void ForwardMethodToField(MethodDefinition externMethod, FieldReference mirroredField, FieldDefinition instanceField)
+    private static void ForwardMethodToField(MethodDefinition externMethod, FieldReference mirroredField, FieldDefinition instanceField,
+        TypeDefinition unusedType)
     {
         ILProcessor processor = externMethod.Body.GetILProcessor();
 
@@ -481,12 +555,41 @@ public class ModuleWeaver : BaseModuleWeaver
         {
             if (externMethod.IsGetter)
             {
+                FieldDefinition returnValueInstanceField = null;
+
+                var resolvedReturnType = externMethod.ReturnType.Resolve();
+                if (resolvedReturnType?.TryGetMirrorTargetName(out string _) == true)
+                {
+                    MethodDefinition hiddenCtor = resolvedReturnType.GetConstructors()
+                        .Single(c => c.Parameters.Count == 1 &&
+                                     c.Parameters[0].ParameterType == unusedType);
+                    returnValueInstanceField = resolvedReturnType.Fields.Single(x => x.Name == resolvedReturnType.GetInstanceFieldName());
+
+                    var unusedVariable = new VariableDefinition(unusedType);
+                    externMethod.Body.Variables.Add(unusedVariable);
+
+                    processor.Emit(OpCodes.Ldloca_S, unusedVariable);
+                    processor.Emit(OpCodes.Initobj, unusedType);
+                    processor.Emit(OpCodes.Ldloc, unusedVariable);
+                    processor.Emit(OpCodes.Newobj, hiddenCtor);
+                    processor.Emit(OpCodes.Dup);
+                }
                 processor.Emit(OpCodes.Ldsfld, mirroredField);
+                if (returnValueInstanceField != null)
+                {
+                    processor.Emit(OpCodes.Stfld, returnValueInstanceField);
+                }
                 processor.Emit(OpCodes.Ret);
             }
             else if (externMethod.IsSetter)
             {
                 processor.Emit(OpCodes.Ldarg_0);
+                var parameterType = externMethod.Parameters[0].ParameterType.Resolve();
+                if (parameterType?.TryGetMirrorTargetName(out string _) == true)
+                {
+                    FieldDefinition returnValueInstanceField = parameterType.Fields.Single(x => x.Name == parameterType.GetInstanceFieldName());
+                    processor.Emit(OpCodes.Ldfld, returnValueInstanceField);
+                }
                 processor.Emit(OpCodes.Stsfld, mirroredField);
                 processor.Emit(OpCodes.Ret);
             }
@@ -495,9 +598,33 @@ public class ModuleWeaver : BaseModuleWeaver
         {
             if (externMethod.IsGetter)
             {
+                FieldDefinition returnValueInstanceField = null;
+
+                var resolvedReturnType = externMethod.ReturnType.Resolve();
+                if (resolvedReturnType?.TryGetMirrorTargetName(out string _) == true)
+                {
+                    MethodDefinition hiddenCtor = resolvedReturnType.GetConstructors()
+                        .Single(c => c.Parameters.Count == 1 &&
+                                     c.Parameters[0].ParameterType == unusedType);
+                    returnValueInstanceField = resolvedReturnType.Fields.Single(x => x.Name == resolvedReturnType.GetInstanceFieldName());
+
+                    var unusedVariable = new VariableDefinition(unusedType);
+                    externMethod.Body.Variables.Add(unusedVariable);
+
+                    processor.Emit(OpCodes.Ldloca_S, unusedVariable);
+                    processor.Emit(OpCodes.Initobj, unusedType);
+                    processor.Emit(OpCodes.Ldloc, unusedVariable);
+                    processor.Emit(OpCodes.Newobj, hiddenCtor);
+                    processor.Emit(OpCodes.Dup);
+                }
+
                 processor.Emit(OpCodes.Ldarg_0);
                 processor.Emit(OpCodes.Ldfld, instanceField);
                 processor.Emit(OpCodes.Ldfld, mirroredField);
+                if (returnValueInstanceField != null)
+                {
+                    processor.Emit(OpCodes.Stfld, returnValueInstanceField);
+                }
                 processor.Emit(OpCodes.Ret);
             }
             else if (externMethod.IsSetter)
@@ -505,13 +632,19 @@ public class ModuleWeaver : BaseModuleWeaver
                 processor.Emit(OpCodes.Ldarg_0);
                 processor.Emit(OpCodes.Ldfld, instanceField);
                 processor.Emit(OpCodes.Ldarg_1);
+                var parameterType = externMethod.Parameters[0].ParameterType.Resolve();
+                if (parameterType?.TryGetMirrorTargetName(out string _) == true)
+                {
+                    FieldDefinition returnValueInstanceField = parameterType.Fields.Single(x => x.Name == parameterType.GetInstanceFieldName());
+                    processor.Emit(OpCodes.Ldfld, returnValueInstanceField);
+                }
                 processor.Emit(OpCodes.Stfld, mirroredField);
                 processor.Emit(OpCodes.Ret);
             }
         }
     }
 
-    private static MethodBody BuildExternMethodBody(MethodReference mirroredMethod, MethodDefinition externMethod,
+    private static MethodBody ForwardMethodToMethod(MethodReference mirroredMethod, MethodDefinition externMethod,
         FieldDefinition instanceField, TypeDefinition unusedType)
     {
         var body = new MethodBody(externMethod);

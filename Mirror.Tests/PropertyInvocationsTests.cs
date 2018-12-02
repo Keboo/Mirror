@@ -20,6 +20,7 @@ namespace Mirror.Tests
             [Mirror("_PrivateProperty")]
             public extern PropertyValueMirror PrivatePropertyField { get; set; }
             public extern PropertyValueMirror PrivateProperty { get; set; }
+            public extern PropertyValueMirror PrivateReadonlyProperty { get; }
             [Mirror("_PublicStaticProperty")]
             public static extern int PublicStaticPropertyField { get; set; }
             public static extern int PublicStaticProperty { get; set; }
@@ -39,7 +40,7 @@ namespace Mirror.Tests
             public extern int Value { get; set; }
 #pragma warning restore CS0626 // Method, operator, or accessor is marked external and has no attributes on it
         }
-
+        
         //[ClassInitialize]
         //public static void Initialize(TestContext context)
         //{
@@ -141,6 +142,17 @@ namespace Mirror.Tests
             var invocation = MethodInvocation.Invocations.Single();
             Assert.AreEqual(nameof(PropertyInvocationsMirror.PrivateProperty) + "_get", invocation.MemberName);
             Assert.AreEqual(typeof(PropertyInvocationsMirror).GetMirrorClass(), invocation.ContainingType.FullName);
+        }
+
+        [TestMethod]
+        public void CanGetReadonlyProperty()
+        {
+            var sut = new PropertyInvocationsMirror();
+
+            PropertyValueMirror rv = sut.PrivateReadonlyProperty;
+
+            Assert.IsNotNull(rv);
+            Assert.AreEqual(24, rv.Value);
         }
 
         [TestMethod]
