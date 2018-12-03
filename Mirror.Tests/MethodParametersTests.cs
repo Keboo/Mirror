@@ -24,7 +24,12 @@ namespace Mirror.Tests
         }
 
         [Mirror("AssemblyToTest.Parameter")]
-        private class ParameterMirror { }
+        private class ParameterMirror
+        {
+#pragma warning disable CS0824 // Constructor is marked external
+            public extern ParameterMirror();
+#pragma warning restore CS0824 // Constructor is marked external
+        }
         
         [Mirror("AssemblyToTest.ReturnValue")]
         private class ReturnValueMirror { }
@@ -40,7 +45,7 @@ namespace Mirror.Tests
         {
             var sut = new MethodParametersMirror(42);
 
-            Assert.IsNotNull(sut);
+            Assert.IsInstanceOfType(sut, typeof(MethodParametersMirror));
             var invocation = MethodInvocation.Invocations.Single();
             Assert.AreEqual(".ctor", invocation.MemberName);
             Assert.AreEqual(42, invocation.Parameters.Single());
@@ -52,7 +57,7 @@ namespace Mirror.Tests
         {
             var sut = new MethodParametersMirror("42");
 
-            Assert.IsNotNull(sut);
+            Assert.IsInstanceOfType(sut, typeof(MethodParametersMirror));
             var invocation = MethodInvocation.Invocations.Single();
             Assert.AreEqual(".ctor", invocation.MemberName);
             Assert.AreEqual("42", invocation.Parameters.Single());
@@ -91,8 +96,8 @@ namespace Mirror.Tests
             var sut = new MethodParametersMirror();
 
             ReturnValueMirror returnValue = sut.DoSomething(new ParameterMirror());
-
-            Assert.IsNotNull(returnValue);
+            
+            Assert.IsInstanceOfType(returnValue, typeof(ReturnValueMirror));
             var invocation = MethodInvocation.Invocations.Single();
             Assert.AreEqual(nameof(MethodParametersMirror.DoSomething), invocation.MemberName);
             Assert.AreEqual(typeof(ParameterMirror).GetMirrorClass(), invocation.Parameters.Single().GetType().FullName);

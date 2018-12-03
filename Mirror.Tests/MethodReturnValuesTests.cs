@@ -11,6 +11,8 @@ namespace Mirror.Tests
         private class MethodReturnValuesMirror
         {
 #pragma warning disable CS0626 // Method, operator, or accessor is marked external and has no attributes on it
+#pragma warning disable CS0824 // Constructor is marked external
+            public extern MethodReturnValuesMirror();
             public extern string Get42();
             public static extern int Get43();
             public static extern MethodReturnValuesMirror CreateInstance();
@@ -18,6 +20,7 @@ namespace Mirror.Tests
             public extern int RealGetHashCode();
             public override extern int GetHashCode();
 #pragma warning restore CS0626 // Method, operator, or accessor is marked external and has no attributes on it
+#pragma warning restore CS0824 // Constructor is marked external
         }
 
         [TestInitialize]
@@ -81,7 +84,7 @@ namespace Mirror.Tests
         {
             MethodReturnValuesMirror instance = MethodReturnValuesMirror.CreateInstance();
 
-            Assert.IsNotNull(instance);
+            Assert.IsInstanceOfType(instance, typeof(MethodReturnValuesMirror));
             Assert.AreEqual(42, instance.RealGetHashCode());
             var invocation = MethodInvocation.Invocations.First();
             Assert.AreEqual(nameof(MethodReturnValuesMirror.CreateInstance), invocation.MemberName);

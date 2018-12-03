@@ -10,6 +10,10 @@ namespace Mirror.Tests
         [Mirror("AssemblyToTest.PropertyInvocations")]
         private class PropertyInvocationsMirror
         {
+#pragma warning disable CS0824 // Constructor is marked external
+            public extern PropertyInvocationsMirror();
+#pragma warning restore CS0824 // Constructor is marked external
+
 #pragma warning disable CS0626 // Method, operator, or accessor is marked external and has no attributes on it
             [Mirror("_PublicProperty")]
             public extern int PublicPropertyField { get; set; }
@@ -36,21 +40,13 @@ namespace Mirror.Tests
         [Mirror("AssemblyToTest.PropertyValue")]
         private class PropertyValueMirror
         {
+#pragma warning disable CS0824 // Constructor is marked external
+            public extern PropertyValueMirror();
+#pragma warning restore CS0824 // Constructor is marked external
 #pragma warning disable CS0626 // Method, operator, or accessor is marked external and has no attributes on it
             public extern int Value { get; set; }
 #pragma warning restore CS0626 // Method, operator, or accessor is marked external and has no attributes on it
         }
-        
-        //[ClassInitialize]
-        //public static void Initialize(TestContext context)
-        //{
-        //    var weaver = Weaver.FindWeaver("Mirror");
-        //    using (var ms = new MemoryStream(File.ReadAllBytes(Assembly.GetExecutingAssembly().Location)))
-        //    {
-        //        ms.Position = 0;
-        //        weaver.ApplyToAssembly(ms);
-        //    }
-        //}
 
         [TestInitialize]
         public void TestInitialize()
@@ -151,7 +147,7 @@ namespace Mirror.Tests
 
             PropertyValueMirror rv = sut.PrivateReadonlyProperty;
 
-            Assert.IsNotNull(rv);
+            Assert.IsInstanceOfType(rv, typeof(PropertyValueMirror));
             Assert.AreEqual(24, rv.Value);
         }
 

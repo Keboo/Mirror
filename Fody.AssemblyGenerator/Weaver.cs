@@ -114,9 +114,6 @@ namespace Fody.AssemblyGenerator
 
             assemblyStream.Position = 0;
             module.Write(assemblyStream);
-
-
-
         }
 
         //public override bool TrySetMember(SetMemberBinder binder, object value)

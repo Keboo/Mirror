@@ -2,7 +2,7 @@
 
 namespace Mirror
 {
-    [AttributeUsage(AttributeTargets.Class | AttributeTargets.Method | AttributeTargets.Property)]
+    [AttributeUsage(AttributeTargets.Class | AttributeTargets.Struct | AttributeTargets.Method | AttributeTargets.Property)]
     public class MirrorAttribute : Attribute
     {
         public string TargetName { get; }

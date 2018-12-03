@@ -10,6 +10,10 @@ namespace Mirror.Tests
         [Mirror("AssemblyToTest.PublicInstanceClass")]
         private class PublicInstanceClassMirror
         {
+#pragma warning disable CS0824 // Constructor is marked external
+            public extern PublicInstanceClassMirror();
+#pragma warning restore CS0824 // Constructor is marked external
+
             [Mirror]
             public extern void PrivateMethod();
 
